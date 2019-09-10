@@ -1,0 +1,154 @@
+Clase 3
+Procesamiento distribuido (Big data)
+Instalar spark
+
+Tenemos un cluster de equipos (16 en grupos de 4)
+La parte mas lenta es la transferencia desde y hacia el cluster. Las operaciones entre equipos son muy rapidas en
+Comparacion 
+
+Unsamos Hadoop Distributed File System (HDFS)
+Esta formada por distintos data nodes (DN) En algun lado hay un Name Node (NN o master)
+HDFS tiene bloques de hasta 128Mb y el main node es el que se encarga de tener todas las tablass y
+estructura administrativa para saber que bloques se referencias a que archivo
+
+Se van a tener tres copias de cada bloque, va a buscar no tener las tres en el mismo rack asi, en caso de que haya un problema con alguno de los racks, no se caiga todo. Que pasa si se muere el "master"? Siempre se tiene un backup del master. Cada cosa que pasa en el master se replica en el backup.
+
+Como funciona? Cada vez que se quiere hacer algo con HDFS se crea un "cliente" que pide cierta informacion. El master solo le dice en que lugar del rack se encuentra la misma. La transferencia de datos la hace el CLIENTE. Casi siempre vamos a estar parados en un equipo que no se encuentra en el cluster.
+
+SPARK
+
+Es una herramienta para procesamiento de datos distribuidos. Vamos a verlo desde el punto de vista del usuario. Tiene muchas API que podemos usar. Nosotros vamos a trabajar con la API RDD (Recieved distributed datasets.
+Los RDD son referencias a algun archivo fisico.
+    - Se referencia algun archivo
+    - Es solo de lectura
+
+Como se crea un RDD?
+
+rdd1 = sc.textfile(path)
+    sc: spark context
+
+Cada linea del archivo se hace un registro. El path puede ser local o de HDFS
+
+rdd2 = sc.wholeTextFiles(path) #Recibe un directorio, aca cada registro es un archivo
+
+rdd3 = sc.parallelize([1,2,3,4,5],n) #Crea un rdd con los datos enviados con "n" particiones
+
+Hay operaciones que nos permiten cambiar la cantidad de particiones del rdd
+
+rdd.coalesce(n) #Para pasar de muchas particiones a menos, comunmente se usa para pasar todo a 1 particion
+rdd.repartition(n) #Al reves
+
+El lugar desde donde estamos se llama "driver" para SPARK.
+
+Operaciones con rdds
+
+Tenemos acciones y transformaciones.
+
+    Acciones:
+        - Cuando disparo una accion sobre un rdd, el resultado va al driver
+        - rdd1.count() nos trae al driver la cantidad de registros que tiene el rdd
+        - rdd1.take(n) nos trae n registros al driver. Los primeros n, pero no sabemos cual es el primero.
+        - rdd1.takeOrdered(n, func()) nos da los primeros n ordenados por func()
+        - rdd1.collect() se trae todo el rdd al driver
+        - rdd1.first() equivalente a take de 1
+        - rdd1.takeSample(withRepl, n, seed)
+            withRepl: boolean, con o sin reemplazo
+            n: cantidad de registros a traer
+            seed: inicializador de la funcion random
+        - rdd1.countByKey() Supone que el rdd esta formado por tuplas de clave valor(el valor puede ser un obj). Cuenta cuantos registros hay por cada clave.
+        - rdd1.reduce(func())
+            func(x,y): la funcion recibe dos registros y devuelve un registro. El que devuelve tiene que tener el mismo formato de los que ingresaron. Con el ejemplo de los numeros y la funcion ""lambda x,y:x+y"" nos daria 15.
+            Que pasa aca? Lo va haciendo en paralelo en el cluster, cada bloque va a tener su suma. Vamos a tener luego un registro en cada particion, los reduce para tener una sola particion de la suma de los bloques y ahi termina la sumatoria. Esta accion de llevar registros de una particion a otra se llama "shuffle". Buscamos minimizar el shuffle
+            
+    Transformaciones:
+        - A diferencia de las acciones, estas transforman a un rdd en otro pero no interactuan con el driver. Spark no hace nada hasta que le llega una accion. Podemos transformar todo lo que queremos pero nada se va a hacer hasta que pidamos algo que va al disco.
+        - rdd1.map(func) la funcion se aplica a un registro y devuelve un registro. Le aplica a cada registro del rdd una funcion
+        - si hacemos ""rdd1.map(lambda x: x*x).reduce(__+__)"" seria la suma de los cuadrados
+        - rdd1.filter(func) devuelve true o false y sobreviven los registros para los cuales la func dio true
+        - rdd1.flatMap(func) muy parecido a map, necesita una funcion que recibe un registre pero devuelve 1 a n registros. 
+
+-----------------------------------------------------------------------
+Ejemplo
+""rdd1.flatMap(lambda x: [d for d in range (0,x)]).collect()"" devuelve
+[1,1,2,1,2,3,1,2,3,4,1,2,3,4,5]
+""rdd1.map(lambda x: [d for d in range (0,x)]).collect()"" devuelve
+[[1],[1,2],[1,2,3],[1,2,3,4],[1,2,3,4,5]]
+-----------------------------------------------------------------------
+
+        - rdd1.sample(withRep, fraction, seed) igual al anterior, solo que aca fraction es un porcentaje (ej: 0.01 para 1%)
+        - rdd1.distinct() elimina registros duplicados. Para hacer esto hay que hacer shuffle de TODO el rdd.
+        - rdd1.reduceByKey(func) la funcion es igual a la del reduce solo que recibe dos VALORES de registros ya que se supone que el rdd es de tipo clave valor. Para cada clave hace un reduce de todos los valores dentro de esa key. Dispara un shuffle pero chico.
+
+-----------------------------------------------------------------------
+Ejemplo:
+("A",3)("B",5)("A",2)("C",5)("B",4)
+rdd.reduceByKey(lambda x,y:x+y).collect()
+devuelve:
+[("A",5)("B",9)("C",5)]
+-----------------------------------------------------------------------
+
+        - rdd.groupByKey() Supone que el rdd es de clave valor. Genera un nuevo rdd donde hay un registro por clave y el valor es una lista de los valores asociados a esa clase. Es un shuffle grande
+
+-----------------------------------------------------------------------
+Con el ejemplo anterior queda
+("A",[3,2])("B",[5,4])("C",[5])
+-----------------------------------------------------------------------
+
+        - rdd.malValues(fund) supone que los registros son de tipo clave valor. Toma un value y devuelve otro value. Es un .map aplicado a los values.
+        
+-----------------------------------------------------------------------
+Ejemplo con el dataset anterior
+rdd.mapValues(lambda x:x*2).collect()
+("A",6)("B",10)("A",4)("C",10)("B",8)
+-----------------------------------------------------------------------
+
+        - rdd.mapPartitions(func) Un map que se aplica a nivel de cada particion del RDD. Se recibe una lista de registros y devuelve una lista de registros.
+        
+        JOINS, casi siempre implica un shuffle
+        - rdd1.join(rdd2) supone clave valor. Hace un inner join. Devuelve (k,[v_rdd1, v_rdd2]).
+        - rdd1.leftOuterJoin(rdd2) hace un left join.
+        - rdd1.rightOuterJoin(rdd2) hace un right join.
+        - rdd1.fillOuterJoin(rdd2) hace un full join.
+        - rdd1.union(rdd2) No elimina los repetidos
+        - rdd1.intersecition(rdd2) Registros que aparecen en ambos rdd
+        
+        PERSISTENCIA
+        Cada vez que hacemos una accion, se dispara TODA la secuencia de transformaciones. Si queremos guardar un resultado intermedio debemos hacer rdd.algo.algo.cache(). El parametro de cache deja decidir adonde queremos guardar el rdd.
+        
+        BROADCAST
+
+-----------------------------------------------------------------------
+        d = {"A":3 , "B":5}
+        
+        def hacerAlgo(x):
+            if (x[0] in d)
+                return 5
+            else
+                return 23
+                
+        rdd1.map(hacerAlgo).collect()
+-----------------------------------------------------------------------
+
+        Tiene que copiarse toda la funcion y el diccionario. Si este no es muy grande no pasa nada, pero puede generar problemas. Se soluciona haciendo un BROADCAST
+        
+        - bd = sc.broadcast(d) Le manda a todo el cluster el diccionario sin tener que copiarlo en todos
+        - bd.value es el diccionario.
+        Se usa en el JOIN. Si el RDD es muy chico, se hace un broadcast del RDD chico. Es como si los otros RDD tuvieran un diccionario cerca. Esto se hace para que el JOIN no tenga que hacer mucho shuffle.
+        
+-----------------------------------------------------------------------
+-----------------------------------------------------------------------
+Ejemplo word count
+
+#Quiero una lista de Palabra, cantidad de veces
+rdd = sc.textFile(",,,,,.txt")
+rdd = rdd.flatMap(lambda x: x.split())
+#Hace que aparezca la palabra y el numero
+rdd = rdd.map(lambda x: (x,1))
+#Suma los values de cosas con la misma key
+rdd = rdd.reduceByKey(lambda x,y: x+y)
+rdd.collect()
+
+-----------------------------------------------------------------------
+-----------------------------------------------------------------------
+
+        
