@@ -1,4 +1,4 @@
-# Organización de Datos TP1, Grupo TRIPLE A
+# Organización de Datos TP1, Grupo 3
 
 Integrantes:
   - Andrés Correa, padrón 102310, correaandres700@gmail.com
